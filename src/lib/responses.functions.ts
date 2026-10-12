@@ -73,16 +73,16 @@ export const getGlobalReply = createServerFn({ method: "GET" }).handler(async ()
   const [{ data: cfg }, { data: msgs }, { data: contacts }] = await Promise.all([
     db.from("global_reply_settings").select("*").eq("id", true).maybeSingle(),
     db.from("messages").select("phone, created_at").eq("direction", "IN").order("created_at", { ascending: false }).limit(200),
-    db.from("contact_ai").select("phone, paused, last_reply_at"),
+    db.from("contact_ai").select("phone, paused, last_reply_at, assigned_name, assigned_at"),
   ]);
   const map = new Map<string, any>((contacts ?? []).map((c: any) => [c.phone, c]));
   const seen = new Set<string>();
-  const recent: { phone: string; lastAt: string; paused: boolean; lastReplyAt: string | null }[] = [];
+  const recent: { phone: string; lastAt: string; paused: boolean; lastReplyAt: string | null; assignedName: string | null; assignedAt: string | null }[] = [];
   for (const m of msgs ?? []) {
     if (!m.phone || seen.has(m.phone)) continue;
     seen.add(m.phone);
     const c = map.get(m.phone);
-    recent.push({ phone: m.phone, lastAt: m.created_at, paused: Boolean(c?.paused), lastReplyAt: c?.last_reply_at ?? null });
+    recent.push({ phone: m.phone, lastAt: m.created_at, paused: Boolean(c?.paused), lastReplyAt: c?.last_reply_at ?? null, assignedName: c?.assigned_name ?? null, assignedAt: c?.assigned_at ?? null });
     if (recent.length >= 30) break;
   }
   return {

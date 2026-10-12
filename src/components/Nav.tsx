@@ -1,4 +1,7 @@
 import { Link } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
+
+import { supabase } from "@/integrations/supabase/client";
 
 const items = [
   { to: "/", label: "WhatsApp" },
@@ -29,6 +32,7 @@ export function Nav() {
             </Link>
           ))}
         </nav>
+        <AuthLink />
       </div>
     </header>
   );
@@ -57,5 +61,28 @@ export function StatusBadge({ status }: { status: string }) {
     >
       {status}
     </span>
+  );
+}
+
+function AuthLink() {
+  const [email, setEmail] = useState<string | null>(null);
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setEmail(data.session?.user.email ?? null));
+    const { data } = supabase.auth.onAuthStateChange((_e, s) => setEmail(s?.user.email ?? null));
+    return () => data.subscription.unsubscribe();
+  }, []);
+  if (!email)
+    return (
+      <Link to="/auth" className="ml-auto rounded-md border border-input px-3 py-1.5 text-sm hover:bg-accent">
+        Entrar como atendente
+      </Link>
+    );
+  return (
+    <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
+      <span>👤 {email}</span>
+      <button onClick={() => supabase.auth.signOut()} className="rounded-md border border-input px-2 py-1 hover:bg-accent">
+        Sair
+      </button>
+    </div>
   );
 }

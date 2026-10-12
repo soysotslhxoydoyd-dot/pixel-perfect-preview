@@ -30,6 +30,13 @@ interface ExecutionRow {
   replied: boolean;
 }
 
+
+/** Atendente humano assumiu a conversa: automacao nao envia nada. */
+async function isHumanHandling(phone: string): Promise<boolean> {
+  const { data } = await (getDb() as any).from("contact_ai").select("assigned_to").eq("phone", normalizePhone(phone)).maybeSingle();
+  return Boolean(data?.assigned_to);
+}
+
 /** Janela de horario permitido. Retorna null se pode enviar agora. */
 async function nextAllowedTime(now = new Date()): Promise<Date | null> {
   const db = getDb();
@@ -273,6 +280,10 @@ export async function runPendingReplies(limit = 10) {
       .select("id")
       .maybeSingle();
     if (!locked) continue;
+    if (await isHumanHandling(row.phone)) {
+      await log("AUTO_REPLY_SKIPPED", "OK", { phone: row.phone, reason: "atendimento humano" }, row.id);
+      continue;
+    }
 
     const { data: lastIn } = await db
       .from("messages")
@@ -440,6 +451,18 @@ async function processExecution(execution: ExecutionRow) {
 
   switch (step.type) {
     case "SEND_MESSAGE": {
+      if (await isHumanHandling(execution.phone)) {
+        await db
+          .from("automation_executions")
+          .update({
+            status: "WAITING",
+            next_run_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", execution.id);
+        await log("SKIPPED_HUMAN_HANDLING", "OK", { phone: execution.phone }, execution.id, step.id);
+        return;
+      }
       const allowedAt = await nextAllowedTime();
       if (allowedAt) {
         await db
