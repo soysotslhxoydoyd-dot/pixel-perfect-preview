@@ -11,7 +11,10 @@ export const Route = createFileRoute("/api/public/hooks/evolution")({
       POST: async ({ request }) => {
         const expected = process.env["WHAPI_WEBHOOK_TOKEN"];
         const token = new URL(request.url).searchParams.get("token");
-        if (!expected || token !== expected) return new Response("unauthorized", { status: 401 });
+        if (!expected || token !== expected) {
+          console.error(`[WEBHOOK_REJECTED] ${expected ? "token invalido" : "WHAPI_WEBHOOK_TOKEN nao configurado"}`);
+          return new Response("unauthorized", { status: 401 });
+        }
 
         let payload: any;
         try {
