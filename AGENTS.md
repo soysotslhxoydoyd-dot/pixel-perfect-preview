@@ -14,3 +14,6 @@
 - Provider layer: Evolution API (config in evolution_config table, server-only) when enabled, Whapi fallback; all callers go through ActiveProvider. Why: swap providers without touching engine.
 - Lead interest score lives in `interest.ts` (pure rules) + `interest.server.ts` (AI + DB); it is scheduled from `handleInboundReply` and run after replies/in the worker, never altering replies. Why: score failures must not affect WhatsApp answers.
 - Migrations are managed in drizzle/migrations (applied via the migration tool). Why: platform-managed history for this project.
+
+- Human handoff: claims go through the `claim_conversation`/`release_conversation` SQL functions (atomic, one attendant per phone) and set `contact_ai.paused`; the engine skips sends while `contact_ai.assigned_to` is set. Why: concurrency must be decided by the database, not the UI.
+- Inbound alerts come from a trigger on `messages` (direction IN) into `inbound_alerts`, streamed to signed-in attendants via Realtime. Why: works for every provider webhook without touching them.
