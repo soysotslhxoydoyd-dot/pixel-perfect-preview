@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { Link, useNavigate } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { MessageCircle, Volume2, VolumeX, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -185,10 +185,3 @@ export function MessageAlerts() {
   );
 }
 
-export function SignInHint() {
-  return (
-    <Link to="/auth" className="text-sm text-primary underline">
-      Entrar
-    </Link>
-  );
-}
