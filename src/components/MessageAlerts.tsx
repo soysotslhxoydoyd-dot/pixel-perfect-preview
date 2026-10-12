@@ -1,0 +1,194 @@
+import { useQueryClient } from "@tanstack/react-query";
+import { Link, useNavigate } from "@tanstack/react-router";
+import { useServerFn } from "@tanstack/react-start";
+import { MessageCircle, Volume2, VolumeX, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+
+import { supabase } from "@/integrations/supabase/client";
+import { ALERT_SECONDS, secondsLeft } from "@/lib/alert-timer";
+import { claimConversation } from "@/lib/handoff.functions";
+
+interface Alert {
+  id: string;
+  phone: string;
+  contact_name: string | null;
+  preview: string | null;
+  received_at: string;
+  shownAt: number;
+  state: "idle" | "claiming" | "claimed" | "taken" | "error";
+  note?: string;
+}
+
+const SEEN_KEY = "gavioes-alerts-seen";
+const SOUND_KEY = "gavioes-alerts-sound";
+
+function loadSeen(): Set<string> {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(SEEN_KEY) ?? "[]"));
+  } catch {
+    return new Set();
+  }
+}
+function saveSeen(seen: Set<string>) {
+  localStorage.setItem(SEEN_KEY, JSON.stringify([...seen].slice(-300)));
+}
+
+function beep() {
+  try {
+    const ctx = new AudioContext();
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.frequency.value = 880;
+    g.gain.setValueAtTime(0.08, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.35);
+    o.connect(g).connect(ctx.destination);
+    o.start();
+    o.stop(ctx.currentTime + 0.35);
+  } catch {
+    /* som indisponível */
+  }
+}
+
+export function MessageAlerts() {
+  const [signedIn, setSignedIn] = useState(false);
+  const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [now, setNow] = useState(() => Date.now());
+  const [sound, setSound] = useState(false);
+  const soundRef = useRef(false);
+  const claimFn = useServerFn(claimConversation);
+  const navigate = useNavigate();
+  const qc = useQueryClient();
+
+  useEffect(() => {
+    const on = localStorage.getItem(SOUND_KEY) === "1";
+    setSound(on);
+    soundRef.current = on;
+    supabase.auth.getSession().then(({ data }) => setSignedIn(Boolean(data.session)));
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => setSignedIn(Boolean(session)));
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!signedIn) return;
+    const seen = loadSeen();
+    const channel = supabase
+      .channel("inbound-alerts")
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "inbound_alerts" }, (payload) => {
+        const row = payload.new as Omit<Alert, "shownAt" | "state">;
+        if (seen.has(row.id)) return;
+        seen.add(row.id);
+        saveSeen(seen);
+        setAlerts((cur) => [...cur, { ...row, shownAt: Date.now(), state: "idle" }]);
+        qc.invalidateQueries({ queryKey: ["global-reply"] });
+        if (soundRef.current) beep();
+      })
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [signedIn, qc]);
+
+  useEffect(() => {
+    if (!alerts.length) return;
+    const tick = () => setNow(Date.now());
+    const t = setInterval(tick, 250);
+    document.addEventListener("visibilitychange", tick);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", tick);
+    };
+  }, [alerts.length]);
+
+  // remove alertas expirados (exceto os que estão mostrando o resultado)
+  useEffect(() => {
+    setAlerts((cur) => {
+      const next = cur.filter((a) => a.state === "claiming" || secondsLeft(a.shownAt, now) > 0);
+      return next.length === cur.length ? cur : next;
+    });
+  }, [now]);
+
+  const update = (id: string, patch: Partial<Alert>) =>
+    setAlerts((cur) => cur.map((a) => (a.id === id ? { ...a, ...patch } : a)));
+
+  const claim = async (a: Alert) => {
+    update(a.id, { state: "claiming" });
+    try {
+      const r = await claimFn({ data: { phone: a.phone } });
+      qc.invalidateQueries({ queryKey: ["global-reply"] });
+      if (r.ok) {
+        setAlerts((cur) => cur.filter((x) => x.phone !== a.phone));
+        navigate({ to: "/respostas", hash: `contato-${a.phone}` });
+      } else {
+        update(a.id, { state: "taken", note: `Já assumido por ${r.assignedName ?? "outro atendente"}`, shownAt: Date.now() - 6000 });
+      }
+    } catch (e: any) {
+      update(a.id, { state: "error", note: String(e?.message ?? "Falha ao assumir"), shownAt: Date.now() - 6000 });
+    }
+  };
+
+  const toggleSound = () => {
+    const v = !sound;
+    setSound(v);
+    soundRef.current = v;
+    localStorage.setItem(SOUND_KEY, v ? "1" : "0");
+  };
+
+  return (
+    <>
+      {signedIn && (
+        <button
+          onClick={toggleSound}
+          title={sound ? "Desativar som dos alertas" : "Ativar som dos alertas"}
+          className="alert-sound-toggle"
+        >
+          {sound ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+        </button>
+      )}
+      <div className="alert-stack" aria-live="assertive">
+        {alerts.map((a) => {
+          const left = secondsLeft(a.shownAt, now);
+          return (
+            <div key={a.id} className="alert-card" role="alert">
+              <div className="alert-progress" style={{ width: `${(left / ALERT_SECONDS) * 100}%` }} />
+              <div className="flex items-start gap-3">
+                <div className="alert-icon">
+                  <MessageCircle className="h-5 w-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-bold uppercase tracking-wider text-primary">Nova mensagem no WhatsApp</div>
+                  <div className="mt-1 truncate text-sm font-semibold">{a.contact_name ?? a.phone}</div>
+                  {a.contact_name && <div className="text-xs text-muted-foreground">{a.phone}</div>}
+                  <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">“{a.preview || "(mídia)"}”</p>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    Recebida às {new Date(a.received_at).toLocaleTimeString("pt-BR")} · Tempo para assumir: {left}s
+                  </div>
+                  {a.note && <div className="mt-2 text-xs font-medium text-destructive">{a.note}</div>}
+                </div>
+                <button
+                  onClick={() => setAlerts((cur) => cur.filter((x) => x.id !== a.id))}
+                  className="text-muted-foreground hover:text-foreground"
+                  aria-label="Fechar alerta"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              {a.state !== "taken" && (
+                <button onClick={() => claim(a)} disabled={a.state === "claiming"} className="alert-cta">
+                  {a.state === "claiming" ? "ASSUMINDO..." : "ASSUMIR ATENDIMENTO"}
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+export function SignInHint() {
+  return (
+    <Link to="/auth" className="text-sm text-primary underline">
+      Entrar
+    </Link>
+  );
+}
