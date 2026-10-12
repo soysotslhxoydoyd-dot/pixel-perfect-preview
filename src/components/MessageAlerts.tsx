@@ -15,6 +15,7 @@ interface Alert {
   preview: string | null;
   received_at: string;
   shownAt: number;
+  temp?: { score: number; level: string; hot: boolean } | null;
   state: "idle" | "claiming" | "claimed" | "taken" | "error";
   note?: string;
 }
@@ -71,19 +72,40 @@ export function MessageAlerts() {
   useEffect(() => {
     if (!signedIn) return;
     const seen = loadSeen();
-    const channel = supabase
-      .channel("inbound-alerts")
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let channel: ReturnType<typeof supabase.channel>;
+    const subscribe = () => {
+    channel = supabase
+      .channel(`inbound-alerts-${Date.now()}`)
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "inbound_alerts" }, (payload) => {
         const row = payload.new as Omit<Alert, "shownAt" | "state">;
         if (seen.has(row.id)) return;
         seen.add(row.id);
         saveSeen(seen);
         setAlerts((cur) => [...cur, { ...row, shownAt: Date.now(), state: "idle" }]);
+        supabase
+          .from("lead_interest")
+          .select("score, level, hot")
+          .eq("phone", row.phone)
+          .maybeSingle()
+          .then(({ data }) => data && setAlerts((cur) => cur.map((x) => (x.id === row.id ? { ...x, temp: data } : x))));
         qc.invalidateQueries({ queryKey: ["global-reply"] });
         if (soundRef.current) beep();
       })
-      .subscribe();
+      .subscribe((status) => {
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+          console.warn("[ALERTS] realtime", status, "- reconectando");
+          clearTimeout(retry);
+          retry = setTimeout(() => {
+            supabase.removeChannel(channel);
+            subscribe();
+          }, 3000);
+        }
+      });
+    };
+    subscribe();
     return () => {
+      clearTimeout(retry);
       supabase.removeChannel(channel);
     };
   }, [signedIn, qc]);
@@ -144,7 +166,7 @@ export function MessageAlerts() {
           {sound ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
         </button>
       )}
-      <div className="alert-stack" aria-live="assertive">
+      <div className={alerts.length ? "alert-overlay" : "alert-overlay alert-overlay-empty"} aria-live="assertive">
         {alerts.map((a) => {
           const left = secondsLeft(a.shownAt, now);
           return (
@@ -158,6 +180,11 @@ export function MessageAlerts() {
                   <div className="text-xs font-bold uppercase tracking-wider text-primary">Nova mensagem no WhatsApp</div>
                   <div className="mt-1 truncate text-sm font-semibold">{a.contact_name ?? a.phone}</div>
                   {a.contact_name && <div className="text-xs text-muted-foreground">{a.phone}</div>}
+                  {a.temp && (
+                    <div className="mt-1 text-xs font-semibold">
+                      {a.temp.hot ? "🔥 " : ""}Interesse: {a.temp.level} · {a.temp.score} pts
+                    </div>
+                  )}
                   <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">“{a.preview || "(mídia)"}”</p>
                   <div className="mt-1 text-xs text-muted-foreground">
                     Recebida às {new Date(a.received_at).toLocaleTimeString("pt-BR")} · Tempo para assumir: {left}s
