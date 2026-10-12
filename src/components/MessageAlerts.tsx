@@ -119,10 +119,10 @@ export function MessageAlerts() {
         setAlerts((cur) => cur.filter((x) => x.phone !== a.phone));
         navigate({ to: "/respostas", hash: `contato-${a.phone}` });
       } else {
-        update(a.id, { state: "taken", note: `Já assumido por ${r.assignedName ?? "outro atendente"}`, shownAt: Date.now() - 6000 });
+        update(a.id, { state: "taken", note: `Já assumido por ${r.assignedName ?? "outro atendente"}`, shownAt: Date.now() - 2000 });
       }
     } catch (e: any) {
-      update(a.id, { state: "error", note: String(e?.message ?? "Falha ao assumir"), shownAt: Date.now() - 6000 });
+      update(a.id, { state: "error", note: String(e?.message ?? "Falha ao assumir"), shownAt: Date.now() - 2000 });
     }
   };
 
