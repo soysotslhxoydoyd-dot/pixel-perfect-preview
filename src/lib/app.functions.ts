@@ -99,9 +99,10 @@ export const registerWebhook = createServerFn({ method: "POST" })
     const token = process.env["WHAPI_WEBHOOK_TOKEN"];
     if (!token) return { ok: false, error: "WHAPI_WEBHOOK_TOKEN nao configurado", url: null };
     const hook = (await activeProviderName()) === "evolution" ? "evolution" : "whapi";
-    // Sempre o endereco publicado: o endereco de preview exige login e bloqueia o provedor.
+    // Endereco fixo DESTE projeto (o antigo apontava para outro projeto e as mensagens nunca chegavam).
+    // O endereco de preview com login bloqueia o provedor, por isso nao usamos data.origin.
     void data;
-    const PUBLIC_ORIGIN = "https://automacaogavioesbomclima.lovable.app";
+    const PUBLIC_ORIGIN = "https://project--ef5509e9-687b-4626-a073-84ee5655d9ec-dev.lovable.app";
     const url = `${PUBLIC_ORIGIN}/api/public/hooks/${hook}?token=${token}`;
     try {
       await WhatsAppProvider.setWebhook(url);
