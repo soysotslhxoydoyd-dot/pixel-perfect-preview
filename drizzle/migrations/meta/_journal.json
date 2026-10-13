@@ -29,6 +29,13 @@
       "when": 1791842101751,
       "tag": "0003_attendants_read_interest",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791915214651,
+      "tag": "0004_grant_alert_reads",
+      "breakpoints": true
     }
   ]
 }
