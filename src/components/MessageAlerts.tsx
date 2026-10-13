@@ -172,6 +172,12 @@ export function MessageAlerts() {
     setAlerts((cur) => cur.map((a) => (a.id === id ? { ...a, ...patch } : a)));
 
   const claim = async (a: Alert) => {
+    if (!signedIn) {
+      // assumir exige saber QUEM é o atendente
+      setAlerts((cur) => cur.filter((x) => x.id !== a.id));
+      navigate({ to: "/auth" });
+      return;
+    }
     update(a.id, { state: "claiming" });
     try {
       const r = await claimFn({ data: { phone: a.phone } });
@@ -194,17 +200,19 @@ export function MessageAlerts() {
     localStorage.setItem(SOUND_KEY, v ? "1" : "0");
   };
 
+  useEffect(() => {
+    if (alerts.length) console.info("[ALERTS] G) bumps renderizados:", alerts.map((a) => a.id).join(", "));
+  }, [alerts]);
+
   return (
     <>
-      {signedIn && (
-        <button
-          onClick={toggleSound}
-          title={sound ? "Desativar som dos alertas" : "Ativar som dos alertas"}
-          className="alert-sound-toggle"
-        >
-          {sound ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
-        </button>
-      )}
+      <button
+        onClick={toggleSound}
+        title={sound ? "Desativar som dos alertas" : "Ativar som dos alertas"}
+        className="alert-sound-toggle"
+      >
+        {sound ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+      </button>
       <div className={alerts.length ? "alert-overlay" : "alert-overlay alert-overlay-empty"} aria-live="assertive">
         {alerts.map((a) => {
           const left = secondsLeft(a.shownAt, now);
