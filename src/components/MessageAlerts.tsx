@@ -237,6 +237,7 @@ export function MessageAlerts() {
                     Recebida às {new Date(a.received_at).toLocaleTimeString("pt-BR")} · Tempo para assumir: {left}s
                   </div>
                   {a.note && <div className="mt-2 text-xs font-medium text-destructive">{a.note}</div>}
+                  {!signedIn && <div className="mt-2 text-xs text-muted-foreground">Para assumir, entre como atendente.</div>}
                 </div>
                 <button
                   onClick={() => setAlerts((cur) => cur.filter((x) => x.id !== a.id))}
