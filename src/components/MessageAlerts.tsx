@@ -180,11 +180,11 @@ export function MessageAlerts() {
                   <div className="text-xs font-bold uppercase tracking-wider text-primary">Nova mensagem no WhatsApp</div>
                   <div className="mt-1 truncate text-sm font-semibold">{a.contact_name ?? a.phone}</div>
                   {a.contact_name && <div className="text-xs text-muted-foreground">{a.phone}</div>}
-                  {a.temp && (
-                    <div className="mt-1 text-xs font-semibold">
-                      {a.temp.hot ? "🔥 " : ""}Interesse: {a.temp.level} · {a.temp.score} pts
-                    </div>
-                  )}
+                  <div className="mt-1 text-xs font-semibold">
+                    {a.temp
+                      ? `${a.temp.hot ? "🔥 " : ""}Interesse: ${a.temp.level} · ${a.temp.score} pts`
+                      : "Interesse: AINDA NÃO ANALISADO"}
+                  </div>
                   <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">“{a.preview || "(mídia)"}”</p>
                   <div className="mt-1 text-xs text-muted-foreground">
                     Recebida às {new Date(a.received_at).toLocaleTimeString("pt-BR")} · Tempo para assumir: {left}s
