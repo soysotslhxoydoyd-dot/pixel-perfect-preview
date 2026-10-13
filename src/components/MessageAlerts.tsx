@@ -2,10 +2,11 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { MessageCircle, Volume2, VolumeX, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { supabase } from "@/integrations/supabase/client";
 import { ALERT_SECONDS, secondsLeft } from "@/lib/alert-timer";
+import { listRecentAlerts } from "@/lib/alerts.functions";
 import { claimConversation } from "@/lib/handoff.functions";
 
 interface Alert {
@@ -69,46 +70,84 @@ export function MessageAlerts() {
     return () => sub.subscription.unsubscribe();
   }, []);
 
+  // Um único ponto de entrada para o bump: deduplicado pelo ID do alerta
+  // (um alerta por mensagem recebida, criado pelo gatilho do banco).
+  const seenRef = useRef<Set<string> | null>(null);
+  const ingest = useCallback(
+    (row: { id: string; phone: string; contact_name: string | null; preview: string | null; received_at: string; temp?: Alert["temp"] }, via: string) => {
+      const seen = (seenRef.current ??= loadSeen());
+      console.info(`[ALERTS] D) evento recebido no navegador via ${via}`, row.id, row.phone);
+      if (seen.has(row.id)) return;
+      seen.add(row.id);
+      saveSeen(seen);
+      console.info("[ALERTS] E/F) handler executado, bump adicionado", row.id);
+      setNow(Date.now());
+      setAlerts((cur) => (cur.some((x) => x.id === row.id) ? cur : [...cur, { ...row, temp: row.temp ?? null, shownAt: Date.now(), state: "idle" }]));
+      if (!row.temp) {
+        fetchTemp(row.phone).then((t) => t && setAlerts((cur) => cur.map((x) => (x.id === row.id ? { ...x, temp: t } : x))));
+      }
+      qc.invalidateQueries({ queryKey: ["global-reply"] });
+      if (soundRef.current) beep();
+    },
+    [qc],
+  );
+  const fetchTemp = async (phone: string) => {
+    const { data } = await supabase.from("lead_interest").select("score, level, hot").eq("phone", phone).maybeSingle();
+    return data ?? null;
+  };
+
+  // Entrega principal: consulta o servidor a cada 2s (funciona com ou sem login)
+  const pollFn = useServerFn(listRecentAlerts);
+  useEffect(() => {
+    let cursor: string | null = null;
+    let stop = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const run = async () => {
+      try {
+        const r = await pollFn({ data: { since: cursor } });
+        for (const a of r.alerts) ingest(a, "consulta");
+        // sobreposição de 10s para não perder nada na virada; duplicatas são ignoradas
+        cursor = new Date(Date.parse(r.serverNow) - 10_000).toISOString();
+      } catch (e) {
+        console.error("[ALERTS] falha ao consultar alertas:", e);
+      }
+      if (!stop) timer = setTimeout(run, 2000);
+    };
+    run();
+    return () => {
+      stop = true;
+      clearTimeout(timer);
+    };
+  }, [pollFn, ingest]);
+
+  // Entrega instantânea extra para atendentes logados (tempo real)
   useEffect(() => {
     if (!signedIn) return;
-    const seen = loadSeen();
     let retry: ReturnType<typeof setTimeout> | undefined;
     let channel: ReturnType<typeof supabase.channel>;
     const subscribe = () => {
-    channel = supabase
-      .channel(`inbound-alerts-${Date.now()}`)
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "inbound_alerts" }, (payload) => {
-        const row = payload.new as Omit<Alert, "shownAt" | "state">;
-        if (seen.has(row.id)) return;
-        seen.add(row.id);
-        saveSeen(seen);
-        setAlerts((cur) => [...cur, { ...row, shownAt: Date.now(), state: "idle" }]);
-        supabase
-          .from("lead_interest")
-          .select("score, level, hot")
-          .eq("phone", row.phone)
-          .maybeSingle()
-          .then(({ data }) => data && setAlerts((cur) => cur.map((x) => (x.id === row.id ? { ...x, temp: data } : x))));
-        qc.invalidateQueries({ queryKey: ["global-reply"] });
-        if (soundRef.current) beep();
-      })
-      .subscribe((status) => {
-        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
-          console.warn("[ALERTS] realtime", status, "- reconectando");
-          clearTimeout(retry);
-          retry = setTimeout(() => {
-            supabase.removeChannel(channel);
-            subscribe();
-          }, 3000);
-        }
-      });
+      channel = supabase
+        .channel(`inbound-alerts-${Date.now()}`)
+        .on("postgres_changes", { event: "INSERT", schema: "public", table: "inbound_alerts" }, (payload) => {
+          ingest(payload.new as any, "tempo real");
+        })
+        .subscribe((status) => {
+          console.info("[ALERTS] tempo real:", status);
+          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+            clearTimeout(retry);
+            retry = setTimeout(() => {
+              supabase.removeChannel(channel);
+              subscribe();
+            }, 3000);
+          }
+        });
     };
     subscribe();
     return () => {
       clearTimeout(retry);
       supabase.removeChannel(channel);
     };
-  }, [signedIn, qc]);
+  }, [signedIn, ingest]);
 
   useEffect(() => {
     if (!alerts.length) return;
@@ -133,6 +172,12 @@ export function MessageAlerts() {
     setAlerts((cur) => cur.map((a) => (a.id === id ? { ...a, ...patch } : a)));
 
   const claim = async (a: Alert) => {
+    if (!signedIn) {
+      // assumir exige saber QUEM é o atendente
+      setAlerts((cur) => cur.filter((x) => x.id !== a.id));
+      navigate({ to: "/auth" });
+      return;
+    }
     update(a.id, { state: "claiming" });
     try {
       const r = await claimFn({ data: { phone: a.phone } });
@@ -155,17 +200,19 @@ export function MessageAlerts() {
     localStorage.setItem(SOUND_KEY, v ? "1" : "0");
   };
 
+  useEffect(() => {
+    if (alerts.length) console.info("[ALERTS] G) bumps renderizados:", alerts.map((a) => a.id).join(", "));
+  }, [alerts]);
+
   return (
     <>
-      {signedIn && (
-        <button
-          onClick={toggleSound}
-          title={sound ? "Desativar som dos alertas" : "Ativar som dos alertas"}
-          className="alert-sound-toggle"
-        >
-          {sound ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
-        </button>
-      )}
+      <button
+        onClick={toggleSound}
+        title={sound ? "Desativar som dos alertas" : "Ativar som dos alertas"}
+        className="alert-sound-toggle"
+      >
+        {sound ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+      </button>
       <div className={alerts.length ? "alert-overlay" : "alert-overlay alert-overlay-empty"} aria-live="assertive">
         {alerts.map((a) => {
           const left = secondsLeft(a.shownAt, now);
@@ -190,6 +237,7 @@ export function MessageAlerts() {
                     Recebida às {new Date(a.received_at).toLocaleTimeString("pt-BR")} · Tempo para assumir: {left}s
                   </div>
                   {a.note && <div className="mt-2 text-xs font-medium text-destructive">{a.note}</div>}
+                  {!signedIn && <div className="mt-2 text-xs text-muted-foreground">Para assumir, entre como atendente.</div>}
                 </div>
                 <button
                   onClick={() => setAlerts((cur) => cur.filter((x) => x.id !== a.id))}
